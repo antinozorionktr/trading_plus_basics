@@ -2,11 +2,13 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication, BasicAuthentication
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated
 from .models import Blog, Like, Comment
-from .models import MyUser
 from .serializers import CommentSerializer, BlogSerializer, LikesSerializer
-from django.db.models import Q
+from django.core.mail import send_mail
+from datetime import datetime, timedelta
+from django.shortcuts import get_object_or_404
+from apscheduler.schedulers.background import BackgroundScheduler
 
 class BlogsView(APIView):
     authentication_classes = [SessionAuthentication, BasicAuthentication]
@@ -31,10 +33,21 @@ class LikesView(APIView):
         serializer = LikesSerializer(likes, many=True)
         return Response(serializer.data)
 
-    def post(self, request, *args, **kwargs):
-        serializer = LikesSerializer(data=request.data)
+class LikeView(APIView):
+
+    def post(self, request, pk, *args, **kwargs):
+        blog = get_object_or_404(Blog, pk=pk)
+
+        serializer = LikesSerializer(data={'user': request.user.id, 'blog': blog.id})
+        
         if serializer.is_valid():
-            serializer.save()
+            like = serializer.save()
+
+            user_email = blog.author.email
+            blog_title = blog.title
+
+            schedule_like_notification(user_email, blog_title)
+
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
@@ -76,3 +89,26 @@ class CommentWriteView(APIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+# SENDING EMAIL FOR LIKE
+    
+scheduler = BackgroundScheduler()
+scheduler.start()
+
+def send_like_notification_email(user_email, blog_title):
+    subject = 'You got a like on your blog!'
+    message = f'Your blog "{blog_title}" received a like. Check it out!'
+    from_email = 'ktrzorion@gmail.com'
+    recipient_list = [user_email]
+    send_mail(subject, message, from_email, recipient_list, fail_silently=False)
+
+def schedule_like_notification(user_email, blog_title):
+    run_time = datetime.now() + timedelta(minutes=1)
+
+    scheduler.add_job(
+        send_like_notification_email,
+        'date',
+        run_date=run_time,
+        args=[user_email, blog_title],
+        id=f'{user_email}_{blog_title}'
+    )
